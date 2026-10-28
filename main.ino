@@ -1,5 +1,3 @@
-#define DEFAULT_BUTTON_DEBOUNCE 2000
-
 #define ARUDINO_DEF_FIX
 #ifdef ARUDINO_DEF_FIX
 	#define LOW 0
@@ -11,13 +9,12 @@
 	byte digitalRead(byte);
 	void digitalWrite(byte, byte);
 	void analogWrite(byte, byte);
-	void delay(int);
 	unsigned long millis();
 	float constrain(float, float, float);
 	float fabs(float);
-	float min(float, float);
 	float max(float, float);
 #endif
+
 
 typedef byte pin;
 
@@ -44,104 +41,78 @@ namespace Pinos {
 namespace Speed {
 	constexpr byte min = 0;
 	constexpr byte max = 255;
-	constexpr byte low = max*1/5;
-	constexpr byte medium = max*2/5;
-	constexpr byte fast = max*3/5;
 
-	byte fromNormalized(float value) {
+	constexpr byte fromNormalized(float value) {
 		return constrain(max * value, min, max);
 	}
 }
 
 namespace Timing {
-	constexpr unsigned long pathLostContinueDuration = 1000;
-	constexpr unsigned long finishWaitDuration = 1000;
-	constexpr unsigned long danceSpinDuration = 500;
-	constexpr unsigned long danceDuration = 4 * danceSpinDuration;
+	constexpr unsigned long buttonDebounce = 1000;
+	constexpr unsigned long pathLostContinueDuration = 500;
 }
 
 namespace Direcao {
-	enum DirecaoX { Reto, Esquerda, Direita };
 	enum DirecaoY { Parado, Frente, Tras };
 }
 
-namespace ProgramState {
-	enum ProgramState {
-		WaitingToStart,
+namespace Program {
+	enum State {
+		Stopped,
 		FollowingLine,
-		ContinuingAfterPathLost,
-		WaitingBeforeDance,
-		Dancing
+		NoLineFoundOhNo
 	};
 }
 
 
 struct Motor {
-private:
-	pin pinoNeg_;
-	pin pinoPos_;
-	pin pinoHabilitador_;
+	constexpr Motor(pin pinoNeg, pin pinoPos, pin pinoHabilitador)
+		: pinoNeg_(pinoNeg), pinoPos_(pinoPos), pinoHabilitador_(pinoHabilitador) {}
 
-	byte speed_ = 0;
-	Direcao::DirecaoY direcao_ = Direcao::Parado;
-
-public:
-	Motor(pin pinoNeg, pin pinoPos, pin pinoHabilitador) {
-		pinoNeg_ = pinoNeg;
-		pinoPos_ = pinoPos;
-		pinoHabilitador_ = pinoHabilitador;
-	}
-
-	void setup(byte speed = 0) {
+	void setup(byte speed) {
 		pinMode(pinoNeg_, OUTPUT);
 		pinMode(pinoPos_, OUTPUT);
 		pinMode(pinoHabilitador_, OUTPUT);
 		setSpeed(speed);
 	}
 
-	byte getSpeed() { return speed_; }
-	void setSpeed(byte speed) {
-		speed_ = speed;
-		analogWrite(pinoHabilitador_, speed_);
-	}
+	void setSpeed(byte speed) { analogWrite(pinoHabilitador_, speed); }
 
-	void go(Direcao::DirecaoY direcaoY) {
-		switch (direcaoY)
-		{
-			case Direcao::Parado:
-				digitalWrite(pinoNeg_, LOW);
-				digitalWrite(pinoPos_, LOW);
-				break;
-			case Direcao::Frente:
-				digitalWrite(pinoNeg_, LOW);
-				digitalWrite(pinoPos_, HIGH);
-				break;
-			case Direcao::Tras:
-				digitalWrite(pinoNeg_, HIGH);
-				digitalWrite(pinoPos_, LOW);
-				break;
-		}
+	void go(Direcao::DirecaoY direcao) {
+		if (direcao == Direcao::Parado) write_(LOW, LOW);
+		else if (direcao == Direcao::Frente) write_(LOW, HIGH);
+		else if (direcao == Direcao::Tras) write_(HIGH, LOW);
 	}
 
 	void stop() { go(Direcao::Parado); }
 	void goForward() { go(Direcao::Frente); }
 	void goBack() { go(Direcao::Tras); }
+
+private:
+	pin pinoNeg_;
+	pin pinoPos_;
+	pin pinoHabilitador_;
+	
+	inline void write_(byte neg, byte pos) {
+		digitalWrite(pinoNeg_, neg);
+		digitalWrite(pinoPos_, pos);
+	}
 };
 
-class Carro {
-public:
+struct Carro {
 	Motor motorEsquerdo;
 	Motor motorDireito;
 
-	Carro(Motor esquerdo, Motor direito): motorEsquerdo(esquerdo), motorDireito(direito) {}
+	constexpr Carro(Motor esquerdo, Motor direito)
+		: motorEsquerdo(esquerdo), motorDireito(direito) {}
 
-	void setup(byte speed = 0) {
+	void setup(byte speed) {
 		motorEsquerdo.setup(speed);
 		motorDireito.setup(speed);
 		stop();
 	}
 
-	void setSpeed(byte speed = 0) {
+	void setSpeed(byte speed) {
 		motorEsquerdo.setSpeed(speed);
 		motorDireito.setSpeed(speed);
 	}
@@ -166,30 +137,6 @@ public:
 		motorDireito.goForward();
 	}
 
-	void goBack() {
-		motorEsquerdo.goBack();
-		motorDireito.goBack();
-	}
-
-	void turn(Direcao::DirecaoX direcao, bool soft = false) {
-		switch (direcao)
-		{
-			case Direcao::Reto:
-				goForward();
-				break;
-			case Direcao::Esquerda:
-				motorEsquerdo.stop();
-				motorDireito.goForward();
-				motorDireito.setSpeed(soft ? Speed::medium : Speed::max);
-				break;
-			case Direcao::Direita:
-				motorEsquerdo.goForward();
-				motorDireito.stop();
-				motorEsquerdo.setSpeed(soft ? Speed::medium : Speed::max);
-				break;
-		}
-	}
-
 	void turnFromRatio(float ratio) {
 		if (ratio > 0) {
 			motorDireito.stop();
@@ -203,18 +150,15 @@ public:
 	}
 };
 
-class Sensor {
+struct Sensor {
+	constexpr Sensor(pin pin): pin_(pin) {}
+
+	void setup() { pinMode(pin_, INPUT); }
+
+	bool isOn() { return digitalRead(pin_); }
+	
 private:
 	pin pin_;
-public:
-	Sensor(pin pin): pin_(pin) {}
-
-	void setup() {
-		pinMode(pin_, INPUT);
-	}
-
-	byte read() { return digitalRead(pin_); }
-	bool isOn() { return read(); }
 };
 
 struct PathScanner {
@@ -225,11 +169,11 @@ struct PathScanner {
 	unsigned int meio : 1;
 	unsigned int direito : 1;
 
-	PathScanner(
+	constexpr PathScanner(
 		Sensor sEsquerdo,
 		Sensor sMeio,
-		Sensor sDireito
-	): sensorEsquerdo(sEsquerdo), sensorMeio(sMeio), sensorDireito(sDireito) {}
+		Sensor sDireito)
+	: sensorEsquerdo(sEsquerdo), sensorMeio(sMeio), sensorDireito(sDireito), esquerdo(0), meio(0), direito(0) {}
 
 	void setup() {
 		sensorEsquerdo.setup();
@@ -238,38 +182,15 @@ struct PathScanner {
 	}
 	
 	void update() {
-		esquerdo = sensorEsquerdo.isOn() ? 1 : 0;
-		meio = sensorMeio.isOn() ? 1 : 0;
-		direito = sensorDireito.isOn() ? 1 : 0;
+		esquerdo = sensorEsquerdo.isOn();
+		meio = sensorMeio.isOn();
+		direito = sensorDireito.isOn();
 	}
 
-	float getRatio() {
-		float guy = 0;
-		if (esquerdo) guy--;
-		if (direito) guy++;
-		if (meio) guy /= 2.0;
-
-		return guy;
-	}
-
-
+	float getRatio() { return (direito - esquerdo) * (meio ? 0.5f : 1.0f); }
 	bool isPathVisible() { return esquerdo || meio || direito; }
-	bool shouldTurnLeft() { return esquerdo && !direito; }
-	bool shouldTurnRight() { return direito && !esquerdo; }
-	bool shouldGoStraight() {
-		return (
-			(!esquerdo && meio && !direito)
-			|| (esquerdo && meio && direito)
-			|| (esquerdo && !meio && direito)
-		);
-	}
-
-	Direcao::DirecaoX getRecommendedPath() {
-		if (!isPathVisible() || shouldGoStraight()) return Direcao::Reto;
-		if (shouldTurnLeft()) return Direcao::Esquerda;
-		if (shouldTurnRight()) return Direcao::Direita;
-	}
 };
+
 
 Carro carro = Carro(
 	Motor{
@@ -290,67 +211,67 @@ PathScanner scannerCaminho = PathScanner(
 	Sensor{Pinos::Sensores::direito}
 );
 
-ProgramState::ProgramState programState = ProgramState::WaitingToStart;
+Program::State programState = Program::Stopped;
 unsigned long currentTime;
 unsigned long stateStartedAt;
 long delta;
-long debounce = DEFAULT_BUTTON_DEBOUNCE;
+unsigned long debounce = Timing::buttonDebounce;
 
-unsigned long calculateDelta() {
+inline void updateDelta() {
 	auto oldTime = currentTime;
 	currentTime = millis();
-	return currentTime - oldTime;
+	delta =  (long)currentTime - (long)oldTime;
 }
 
-void updateState(ProgramState::ProgramState newState) {
+inline void preloop() {
+	updateDelta();
+	debounce = max((long)debounce - (long)delta, 0);
+	scannerCaminho.update();
+}
+
+inline void updateState(Program::State newState) {
 	programState = newState;
 	stateStartedAt = currentTime;
+
+	if (newState == Program::Stopped) { carro.stop(); }
 }
 
-void handleButtonPressed() {
-	stateStartedAt = currentTime;
-	debounce = DEFAULT_BUTTON_DEBOUNCE;
+inline void handleButton() {
+	if (!digitalRead(Pinos::botao)) return;
 
-	if (programState == ProgramState::WaitingToStart) {
-		updateState(ProgramState::FollowingLine);
+	debounce = Timing::buttonDebounce;
+
+	if (programState == Program::Stopped) {
+		updateState(Program::FollowingLine);
 	} else {
-		updateState(ProgramState::WaitingToStart);
+		updateState(Program::Stopped);
 		carro.stop();
 	}
 }
 
 void setup() {
-	carro.setup(Speed::fast);
+	carro.setup(Speed::max);
 	scannerCaminho.setup();
 	pinMode(Pinos::botao, INPUT);
 
-	programState = ProgramState::WaitingToStart;
-	stateStartedAt = millis();
+	currentTime = millis();
+	updateState(Program::Stopped);
 }
 
 void loop() {
-	delta = calculateDelta();
-	scannerCaminho.update();
+	preloop();
 
-	debounce = max(debounce - delta, 0);
-
-	if (digitalRead(Pinos::botao)) {
-		if (!debounce) {
-			handleButtonPressed();
-		}
+	if (!debounce) {
+		handleButton();
 	}
 
 	switch (programState) {
-		case ProgramState::WaitingToStart:
-			carro.stop();
-			break;
-
-		case ProgramState::FollowingLine:
+		case Program::FollowingLine:
 			if (!scannerCaminho.isPathVisible()) {
 				carro.setSpeed(Speed::max);
 				carro.goForward();
 
-				updateState(ProgramState::ContinuingAfterPathLost);
+				updateState(Program::NoLineFoundOhNo);
 				break;
 			}
 
@@ -364,36 +285,10 @@ void loop() {
 			}
 			break;
 
-		case ProgramState::ContinuingAfterPathLost:
+		case Program::NoLineFoundOhNo:
 			if (currentTime - stateStartedAt >= Timing::pathLostContinueDuration) {
-				carro.stop();
-
-				updateState(ProgramState::WaitingBeforeDance);
+				updateState(Program::Stopped);
 			}
 			break;
-
-		case ProgramState::WaitingBeforeDance:
-			if (currentTime - stateStartedAt >= Timing::finishWaitDuration) {
-				updateState(ProgramState::Dancing);
-			}
-			break;
-
-		case ProgramState::Dancing:
-			{
-				auto danceTime = currentTime - stateStartedAt;
-				if (danceTime >= Timing::danceDuration) {
-					carro.stop();
-					carro.setSpeed(Speed::min);
-					updateState(ProgramState::WaitingToStart);
-				} else {
-					carro.setSpeed(Speed::max);
-					if ((danceTime / Timing::danceSpinDuration) % 2 == 0) {
-						carro.spinRight();
-					} else {
-						carro.spinLeft();
-					}
-				}
-			}
-			break;
-		}
+	}
 }
