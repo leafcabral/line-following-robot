@@ -148,7 +148,7 @@ public:
 		motorDireito.goBack();
 	}
 
-	void turn(Direcao::DirecaoX direcao) {
+	void turn(Direcao::DirecaoX direcao, bool soft = false) {
 		switch (direcao)
 		{
 			case Direcao::Reto:
@@ -157,12 +157,58 @@ public:
 			case Direcao::Esquerda:
 				motorEsquerdo.stop();
 				motorDireito.goForward();
+				motorDireito.setSpeed(soft ? Speed::medium : Speed::max);
 				break;
 			case Direcao::Direita:
 				motorEsquerdo.goForward();
 				motorDireito.stop();
+				motorEsquerdo.setSpeed(soft ? Speed::medium : Speed::max);
 				break;
 		}
+	}
+};
+
+struct PathScanner {
+	Sensor sensorEsquerdo;
+	Sensor sensorMeio;
+	Sensor sensorDireito;
+	unsigned int esquerdo : 1;
+	unsigned int meio : 1;
+	unsigned int direito : 1;
+
+	PathScanner(
+		Sensor sEsquerdo,
+		Sensor sMeio,
+		Sensor sDireito
+	): sensorEsquerdo(sEsquerdo), sensorMeio(sMeio), sensorDireito(sDireito) {}
+
+	void setup() {
+		sensorEsquerdo.setup();
+		sensorMeio.setup();
+		sensorDireito.setup();
+	}
+
+	void update() {
+		esquerdo = sensorEsquerdo.isOn() ? 1 : 0;
+		meio = sensorMeio.isOn() ? 1 : 0;
+		direito = sensorDireito.isOn() ? 1 : 0;
+	}
+
+	bool isPathVisible() { return esquerdo || meio || direito; }
+	bool shouldTurnLeft() { return esquerdo && !direito; }
+	bool shouldTurnRight() { return direito && !esquerdo; }
+	bool shouldGoStraight() {
+		return (
+			(!esquerdo && meio && !direito)
+			|| (esquerdo && meio && direito)
+			|| (esquerdo && !meio && direito)
+		);
+	}
+
+	Direcao::DirecaoX getRecommendedPath() {
+		if (!isPathVisible() || shouldGoStraight()) return Direcao::Reto;
+		if (shouldTurnLeft()) return Direcao::Esquerda;
+		if (shouldTurnRight()) return Direcao::Direita;
 	}
 };
 
@@ -194,13 +240,11 @@ Carro carro = Carro(
 	}
 );
 
-struct Sensores {
-	Sensor esquerdo, meio, direito;
-} sensores = {
-	.esquerdo = Sensor(Pinos::Sensores::esquerdo),
-	.meio = Sensor(Pinos::Sensores::meio),
-	.direito = Sensor(Pinos::Sensores::direito),
-};
+PathScanner scannerCaminho = PathScanner(
+	Sensor{Pinos::Sensores::esquerdo},
+	Sensor{Pinos::Sensores::meio},
+	Sensor{Pinos::Sensores::direito}
+);
 
 unsigned long calculateDelta() {
 	auto oldTime = currentTime;
@@ -210,6 +254,7 @@ unsigned long calculateDelta() {
 
 void setup() {
 	carro.setup(Speed::fast);
+	scannerCaminho.setup();
 
 	sensores.esquerdo.setup();
 	sensores.meio.setup();
@@ -220,6 +265,7 @@ void setup() {
 
 void loop() {
 	delta = calculateDelta();
+	scannerCaminho.update();
 
 	debounce -= debounce > 0 ? delta : 0;
 
@@ -231,18 +277,8 @@ void loop() {
 	}
 
 	if (isStarted) {
-		carro.setSpeed(Speed::low);
+		carro.turn(scannerCaminho.getRecommendedPath());
 	} else {
 		carro.setSpeed(Speed::min);	
 	}
-	
-	// if (sensores.direito.isOn()) {
-	// 	carro.turn(Direcao::Direita);
-	// } else if (sensores.esquerdo.isOn()) {
-	// 	carro.turn(Direcao::Esquerda);
-	// } else if (sensores.meio.isOn()) {
-	// 	carro.goForward();
-	// } else {
-	// 	carro.goBack();
-	// }
 }
