@@ -1,20 +1,16 @@
 /*
 TODO:
-- smooth direction
 - go back/finish
 */
 
-//#define DEBUG_MODE
-#define CUSTOM_DEFINITIONS
-
 #define DEFAULT_BUTTON_DEBOUNCE 2000
 
+#define CUSTOM_DEFINITIONS
 #ifdef CUSTOM_DEFINITIONS
 	#define LOW 0
 	#define HIGH 1
 	#define INPUT 0
 	#define OUTPUT 1
-
 	typedef unsigned char byte;
 	void pinMode(byte, int);
 	byte digitalRead(byte);
@@ -22,13 +18,12 @@ TODO:
 	void analogWrite(byte, byte);
 	void delay(int);
 	unsigned long millis();
+	float constrain(float, float, float);
+	float fabs(float);
 #endif
 
 typedef byte pin;
-bool isStarted;
-unsigned long currentTime;
-unsigned long delta;
-long debounce = DEFAULT_BUTTON_DEBOUNCE;
+
 
 namespace Pinos {
 	namespace Motores {
@@ -56,6 +51,10 @@ namespace Speed
 	constexpr byte low = max*1/5;
 	constexpr byte medium = max*2/5;
 	constexpr byte fast = max*3/5;
+
+	constexpr byte fromNormalized(float value) {
+		return constrain(max * value, min, max);
+	}
 }
 
 namespace Direcao {
@@ -63,7 +62,8 @@ namespace Direcao {
 	enum DirecaoY { Parado, Frente, Tras };
 }
 
-class Motor {
+
+struct Motor {
 private:
 	pin pinoNeg_;
 	pin pinoPos_;
@@ -166,6 +166,32 @@ public:
 				break;
 		}
 	}
+
+	void turnFromRatio(float ratio) {
+		if (ratio > 0) {
+			motorDireito.stop();
+			motorEsquerdo.goForward();
+			motorEsquerdo.setSpeed(Speed::fromNormalized(fabs(ratio)));
+		} else if (ratio < 0) {
+			motorEsquerdo.stop();
+			motorDireito.goForward();
+			motorDireito.setSpeed(Speed::fromNormalized(fabs(ratio)));
+		}
+	}
+};
+
+class Sensor {
+private:
+	pin pin_;
+public:
+	Sensor(pin pin): pin_(pin) {}
+
+	void setup() {
+		pinMode(pin_, INPUT);
+	}
+
+	byte read() { return digitalRead(pin_); }
+	bool isOn() { return read(); }
 };
 
 struct PathScanner {
@@ -187,12 +213,22 @@ struct PathScanner {
 		sensorMeio.setup();
 		sensorDireito.setup();
 	}
-
+	
 	void update() {
 		esquerdo = sensorEsquerdo.isOn() ? 1 : 0;
 		meio = sensorMeio.isOn() ? 1 : 0;
 		direito = sensorDireito.isOn() ? 1 : 0;
 	}
+
+	float getRatio() {
+		float guy = 0;
+		if (esquerdo) guy--;
+		if (direito) guy++;
+		if (meio) guy /= 2.0;
+
+		return guy;
+	}
+
 
 	bool isPathVisible() { return esquerdo || meio || direito; }
 	bool shouldTurnLeft() { return esquerdo && !direito; }
@@ -209,21 +245,6 @@ struct PathScanner {
 		if (!isPathVisible() || shouldGoStraight()) return Direcao::Reto;
 		if (shouldTurnLeft()) return Direcao::Esquerda;
 		if (shouldTurnRight()) return Direcao::Direita;
-	}
-};
-
-class Sensor {
-private:
-	pin pin_;
-public:
-	Sensor(pin pin): pin_(pin) {}
-
-	void setup() {
-		pinMode(pin_, INPUT);
-	}
-
-	bool isOn() {
-		return digitalRead(pin_) == HIGH ? true : false;
 	}
 };
 
@@ -246,6 +267,12 @@ PathScanner scannerCaminho = PathScanner(
 	Sensor{Pinos::Sensores::direito}
 );
 
+
+bool isStarted;
+unsigned long currentTime;
+unsigned long delta;
+long debounce = DEFAULT_BUTTON_DEBOUNCE;
+
 unsigned long calculateDelta() {
 	auto oldTime = currentTime;
 	currentTime = millis();
@@ -256,9 +283,6 @@ void setup() {
 	carro.setup(Speed::fast);
 	scannerCaminho.setup();
 
-	sensores.esquerdo.setup();
-	sensores.meio.setup();
-	sensores.direito.setup();
 	pinMode(Pinos::botao, INPUT);
 	isStarted = false;
 }
@@ -277,7 +301,17 @@ void loop() {
 	}
 
 	if (isStarted) {
-		carro.turn(scannerCaminho.getRecommendedPath());
+		auto ratio = scannerCaminho.getRatio();
+		carro.turnFromRatio(ratio);
+		if (!ratio) {
+			if (!scannerCaminho.isPathVisible()) {
+				// TODO: make it go back and then go foward and then stop to be sure
+				carro.goBack();
+			} else {
+				carro.setSpeed(Speed::max);
+				carro.goForward();
+			}
+		}
 	} else {
 		carro.setSpeed(Speed::min);	
 	}
