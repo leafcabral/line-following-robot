@@ -1,4 +1,4 @@
-#define ARUDINO_DEF_FIX
+//#define ARUDINO_DEF_FIX
 #ifdef ARUDINO_DEF_FIX
 	#define LOW 0
 	#define HIGH 1
