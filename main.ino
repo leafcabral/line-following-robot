@@ -1,12 +1,13 @@
 /*
 TODO:
-- button to start
 - smooth direction
 - go back/finish
 */
 
-#define DEBUG_MODE
+//#define DEBUG_MODE
 #define CUSTOM_DEFINITIONS
+
+#define DEFAULT_BUTTON_DEBOUNCE 2000
 
 #ifdef CUSTOM_DEFINITIONS
 	#define LOW 0
@@ -20,9 +21,14 @@ TODO:
 	void digitalWrite(byte, byte);
 	void analogWrite(byte, byte);
 	void delay(int);
+	unsigned long millis();
 #endif
 
 typedef byte pin;
+bool isStarted;
+unsigned long currentTime;
+unsigned long delta;
+long debounce = DEFAULT_BUTTON_DEBOUNCE;
 
 namespace Pinos {
 	namespace Motores {
@@ -52,12 +58,10 @@ namespace Speed
 	constexpr byte fast = max*3/5;
 }
 
-
 namespace Direcao {
 	enum DirecaoX { Reto, Esquerda, Direita };
 	enum DirecaoY { Parado, Frente, Tras };
 }
-
 
 class Motor {
 private:
@@ -85,7 +89,6 @@ public:
 	byte getSpeed() { return speed_; }
 	void setSpeed(byte speed) {
 		speed_ = speed;
-		// mudar pra analogWrite
 		analogWrite(pinoHabilitador_, speed_);
 	}
 
@@ -145,7 +148,7 @@ public:
 		motorDireito.goBack();
 	}
 
-	void turn(Direcao::DirecaoX direcao, bool soft = false) {
+	void turn(Direcao::DirecaoX direcao) {
 		switch (direcao)
 		{
 			case Direcao::Reto:
@@ -154,12 +157,10 @@ public:
 			case Direcao::Esquerda:
 				motorEsquerdo.stop();
 				motorDireito.goForward();
-				motorDireito.setSpeed(soft ? Speed::medium : Speed::max);
 				break;
 			case Direcao::Direita:
 				motorEsquerdo.goForward();
 				motorDireito.stop();
-				motorEsquerdo.setSpeed(soft ? Speed::medium : Speed::max);
 				break;
 		}
 	}
@@ -180,51 +181,6 @@ public:
 	}
 };
 
-struct PathScanner {
-	Sensor sensorEsquerdo;
-	Sensor sensorMeio;
-	Sensor sensorDireito;
-	unsigned int esquerdo : 1;
-	unsigned int meio : 1;
-	unsigned int direito : 1;
-
-	PathScanner(
-		Sensor sEsquerdo,
-		Sensor sMeio,
-		Sensor sDireito
-	): sensorEsquerdo(sEsquerdo), sensorMeio(sMeio), sensorDireito(sDireito) {}
-
-	void setup() {
-		sensorEsquerdo.setup();
-		sensorMeio.setup();
-		sensorDireito.setup();
-	}
-
-	void update() {
-		esquerdo = sensorEsquerdo.isOn() ? 1 : 0;
-		meio = sensorMeio.isOn() ? 1 : 0;
-		direito = sensorDireito.isOn() ? 1 : 0;
-	}
-
-	bool isPathVisible() { return esquerdo || meio || direito; }
-	bool shouldTurnLeft() { return esquerdo && !direito; }
-	bool shouldTurnRight() { return direito && !esquerdo; }
-	bool shouldGoStraight() {
-		return (
-			(!esquerdo && meio && !direito)
-			|| (esquerdo && meio && direito)
-			|| (esquerdo && !meio && direito)
-		);
-	}
-
-	Direcao::DirecaoX getRecommendedPath() {
-		if (!isPathVisible() || shouldGoStraight()) return Direcao::Reto;
-		if (shouldTurnLeft()) return Direcao::Esquerda;
-		if (shouldTurnRight()) return Direcao::Direita;
-	}
-};
-
-
 Carro carro = Carro(
 	Motor{
 		Pinos::Motores::esquerdoNegativo,
@@ -237,21 +193,56 @@ Carro carro = Carro(
 		Pinos::Motores::direitoHabilitador
 	}
 );
-PathScanner scannerCaminho = PathScanner(
-	Sensor{Pinos::Sensores::esquerdo},
-	Sensor{Pinos::Sensores::meio},
-	Sensor{Pinos::Sensores::direito}
-);
 
+struct Sensores {
+	Sensor esquerdo, meio, direito;
+} sensores = {
+	.esquerdo = Sensor(Pinos::Sensores::esquerdo),
+	.meio = Sensor(Pinos::Sensores::meio),
+	.direito = Sensor(Pinos::Sensores::direito),
+};
+
+unsigned long calculateDelta() {
+	auto oldTime = currentTime;
+	currentTime = millis();
+	return currentTime - oldTime;
+}
 
 void setup() {
 	carro.setup(Speed::fast);
-	scannerCaminho.setup();
+
+	sensores.esquerdo.setup();
+	sensores.meio.setup();
+	sensores.direito.setup();
+	pinMode(Pinos::botao, INPUT);
+	isStarted = false;
 }
 
-
 void loop() {
-	scannerCaminho.update();
+	delta = calculateDelta();
+
+	debounce -= debounce > 0 ? delta : 0;
+
+	if (digitalRead(Pinos::botao)) {
+		if (debounce <= 0) {
+			isStarted = !isStarted;
+			debounce = DEFAULT_BUTTON_DEBOUNCE;
+		}
+	}
+
+	if (isStarted) {
+		carro.setSpeed(Speed::low);
+	} else {
+		carro.setSpeed(Speed::min);	
+	}
 	
-	carro.turn(scannerCaminho.getRecommendedPath());
+	// if (sensores.direito.isOn()) {
+	// 	carro.turn(Direcao::Direita);
+	// } else if (sensores.esquerdo.isOn()) {
+	// 	carro.turn(Direcao::Esquerda);
+	// } else if (sensores.meio.isOn()) {
+	// 	carro.goForward();
+	// } else {
+	// 	carro.goBack();
+	// }
 }
