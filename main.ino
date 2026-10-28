@@ -1,12 +1,7 @@
-/*
-TODO:
-- go back/finish
-*/
-
 #define DEFAULT_BUTTON_DEBOUNCE 2000
 
-#define CUSTOM_DEFINITIONS
-#ifdef CUSTOM_DEFINITIONS
+#define ARUDINO_DEF_FIX
+#ifdef ARUDINO_DEF_FIX
 	#define LOW 0
 	#define HIGH 1
 	#define INPUT 0
@@ -20,6 +15,8 @@ TODO:
 	unsigned long millis();
 	float constrain(float, float, float);
 	float fabs(float);
+	float min(float, float);
+	float max(float, float);
 #endif
 
 typedef byte pin;
@@ -44,22 +41,38 @@ namespace Pinos {
 	constexpr pin botao = 8;
 }
 
-namespace Speed
-{
+namespace Speed {
 	constexpr byte min = 0;
 	constexpr byte max = 255;
 	constexpr byte low = max*1/5;
 	constexpr byte medium = max*2/5;
 	constexpr byte fast = max*3/5;
 
-	constexpr byte fromNormalized(float value) {
+	byte fromNormalized(float value) {
 		return constrain(max * value, min, max);
 	}
+}
+
+namespace Timing {
+	constexpr unsigned long pathLostContinueDuration = 1000;
+	constexpr unsigned long finishWaitDuration = 1000;
+	constexpr unsigned long danceSpinDuration = 500;
+	constexpr unsigned long danceDuration = 4 * danceSpinDuration;
 }
 
 namespace Direcao {
 	enum DirecaoX { Reto, Esquerda, Direita };
 	enum DirecaoY { Parado, Frente, Tras };
+}
+
+namespace ProgramState {
+	enum ProgramState {
+		WaitingToStart,
+		FollowingLine,
+		ContinuingAfterPathLost,
+		WaitingBeforeDance,
+		Dancing
+	};
 }
 
 
@@ -125,7 +138,7 @@ public:
 	void setup(byte speed = 0) {
 		motorEsquerdo.setup(speed);
 		motorDireito.setup(speed);
-		goForward();
+		stop();
 	}
 
 	void setSpeed(byte speed = 0) {
@@ -140,6 +153,16 @@ public:
 
 	void goForward() {
 		motorEsquerdo.goForward();
+		motorDireito.goForward();
+	}
+
+	void spinRight() {
+		motorEsquerdo.goForward();
+		motorDireito.goBack();
+	}
+
+	void spinLeft() {
+		motorEsquerdo.goBack();
 		motorDireito.goForward();
 	}
 
@@ -267,10 +290,10 @@ PathScanner scannerCaminho = PathScanner(
 	Sensor{Pinos::Sensores::direito}
 );
 
-
-bool isStarted;
+ProgramState::ProgramState programState = ProgramState::WaitingToStart;
 unsigned long currentTime;
-unsigned long delta;
+unsigned long stateStartedAt;
+long delta;
 long debounce = DEFAULT_BUTTON_DEBOUNCE;
 
 unsigned long calculateDelta() {
@@ -279,40 +302,98 @@ unsigned long calculateDelta() {
 	return currentTime - oldTime;
 }
 
+void updateState(ProgramState::ProgramState newState) {
+	programState = newState;
+	stateStartedAt = currentTime;
+}
+
+void handleButtonPressed() {
+	stateStartedAt = currentTime;
+	debounce = DEFAULT_BUTTON_DEBOUNCE;
+
+	if (programState == ProgramState::WaitingToStart) {
+		updateState(ProgramState::FollowingLine);
+	} else {
+		updateState(ProgramState::WaitingToStart);
+		carro.stop();
+	}
+}
+
 void setup() {
 	carro.setup(Speed::fast);
 	scannerCaminho.setup();
-
 	pinMode(Pinos::botao, INPUT);
-	isStarted = false;
+
+	programState = ProgramState::WaitingToStart;
+	stateStartedAt = millis();
 }
 
 void loop() {
 	delta = calculateDelta();
 	scannerCaminho.update();
 
-	debounce -= debounce > 0 ? delta : 0;
+	debounce = max(debounce - delta, 0);
 
 	if (digitalRead(Pinos::botao)) {
-		if (debounce <= 0) {
-			isStarted = !isStarted;
-			debounce = DEFAULT_BUTTON_DEBOUNCE;
+		if (!debounce) {
+			handleButtonPressed();
 		}
 	}
 
-	if (isStarted) {
-		auto ratio = scannerCaminho.getRatio();
-		carro.turnFromRatio(ratio);
-		if (!ratio) {
+	switch (programState) {
+		case ProgramState::WaitingToStart:
+			carro.stop();
+			break;
+
+		case ProgramState::FollowingLine:
 			if (!scannerCaminho.isPathVisible()) {
-				// TODO: make it go back and then go foward and then stop to be sure
-				carro.goBack();
-			} else {
 				carro.setSpeed(Speed::max);
 				carro.goForward();
+
+				updateState(ProgramState::ContinuingAfterPathLost);
+				break;
 			}
+
+			{
+				auto ratio = scannerCaminho.getRatio();
+				carro.turnFromRatio(ratio);
+				if (!ratio) {
+					carro.setSpeed(Speed::max);
+					carro.goForward();
+				}
+			}
+			break;
+
+		case ProgramState::ContinuingAfterPathLost:
+			if (currentTime - stateStartedAt >= Timing::pathLostContinueDuration) {
+				carro.stop();
+
+				updateState(ProgramState::WaitingBeforeDance);
+			}
+			break;
+
+		case ProgramState::WaitingBeforeDance:
+			if (currentTime - stateStartedAt >= Timing::finishWaitDuration) {
+				updateState(ProgramState::Dancing);
+			}
+			break;
+
+		case ProgramState::Dancing:
+			{
+				auto danceTime = currentTime - stateStartedAt;
+				if (danceTime >= Timing::danceDuration) {
+					carro.stop();
+					carro.setSpeed(Speed::min);
+					updateState(ProgramState::WaitingToStart);
+				} else {
+					carro.setSpeed(Speed::max);
+					if ((danceTime / Timing::danceSpinDuration) % 2 == 0) {
+						carro.spinRight();
+					} else {
+						carro.spinLeft();
+					}
+				}
+			}
+			break;
 		}
-	} else {
-		carro.setSpeed(Speed::min);	
-	}
 }
