@@ -1,12 +1,13 @@
 /*
 TODO:
-- button to start
 - smooth direction
 - go back/finish
 */
 
-#define DEBUG_MODE
+//#define DEBUG_MODE
 #define CUSTOM_DEFINITIONS
+
+#define DEFAULT_BUTTON_DEBOUNCE 2000
 
 #ifdef CUSTOM_DEFINITIONS
 	#define LOW 0
@@ -20,9 +21,14 @@ TODO:
 	void digitalWrite(byte, byte);
 	void analogWrite(byte, byte);
 	void delay(int);
+	unsigned long millis();
 #endif
 
 typedef byte pin;
+bool isStarted;
+unsigned long currentTime;
+unsigned long delta;
+long debounce = DEFAULT_BUTTON_DEBOUNCE;
 
 namespace Pinos {
 	namespace Motores {
@@ -52,12 +58,10 @@ namespace Speed
 	constexpr byte fast = max*3/5;
 }
 
-
 namespace Direcao {
 	enum DirecaoX { Reto, Esquerda, Direita };
 	enum DirecaoY { Parado, Frente, Tras };
 }
-
 
 class Motor {
 private:
@@ -85,7 +89,6 @@ public:
 	byte getSpeed() { return speed_; }
 	void setSpeed(byte speed) {
 		speed_ = speed;
-		// mudar pra analogWrite
 		analogWrite(pinoHabilitador_, speed_);
 	}
 
@@ -165,21 +168,6 @@ public:
 	}
 };
 
-class Sensor {
-private:
-	pin pin_;
-public:
-	Sensor(pin pin): pin_(pin) {}
-
-	void setup() {
-		pinMode(pin_, INPUT);
-	}
-
-	bool isOn() {
-		return digitalRead(pin_) == HIGH ? true : false;
-	}
-};
-
 struct PathScanner {
 	Sensor sensorEsquerdo;
 	Sensor sensorMeio;
@@ -224,6 +212,20 @@ struct PathScanner {
 	}
 };
 
+class Sensor {
+private:
+	pin pin_;
+public:
+	Sensor(pin pin): pin_(pin) {}
+
+	void setup() {
+		pinMode(pin_, INPUT);
+	}
+
+	bool isOn() {
+		return digitalRead(pin_) == HIGH ? true : false;
+	}
+};
 
 Carro carro = Carro(
 	Motor{
@@ -237,21 +239,46 @@ Carro carro = Carro(
 		Pinos::Motores::direitoHabilitador
 	}
 );
+
 PathScanner scannerCaminho = PathScanner(
 	Sensor{Pinos::Sensores::esquerdo},
 	Sensor{Pinos::Sensores::meio},
 	Sensor{Pinos::Sensores::direito}
 );
 
+unsigned long calculateDelta() {
+	auto oldTime = currentTime;
+	currentTime = millis();
+	return currentTime - oldTime;
+}
 
 void setup() {
 	carro.setup(Speed::fast);
 	scannerCaminho.setup();
+
+	sensores.esquerdo.setup();
+	sensores.meio.setup();
+	sensores.direito.setup();
+	pinMode(Pinos::botao, INPUT);
+	isStarted = false;
 }
 
-
 void loop() {
+	delta = calculateDelta();
 	scannerCaminho.update();
-	
-	carro.turn(scannerCaminho.getRecommendedPath());
+
+	debounce -= debounce > 0 ? delta : 0;
+
+	if (digitalRead(Pinos::botao)) {
+		if (debounce <= 0) {
+			isStarted = !isStarted;
+			debounce = DEFAULT_BUTTON_DEBOUNCE;
+		}
+	}
+
+	if (isStarted) {
+		carro.turn(scannerCaminho.getRecommendedPath());
+	} else {
+		carro.setSpeed(Speed::min);	
+	}
 }
