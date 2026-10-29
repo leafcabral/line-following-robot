@@ -215,17 +215,17 @@ Program::State programState = Program::Stopped;
 unsigned long currentTime;
 unsigned long stateStartedAt;
 long delta;
-unsigned long debounce = Timing::buttonDebounce;
+long debounce = Timing::buttonDebounce;
 
 inline void updateDelta() {
 	auto oldTime = currentTime;
 	currentTime = millis();
-	delta =  (long)currentTime - (long)oldTime;
+	delta =  currentTime - oldTime;
 }
 
 inline void preloop() {
 	updateDelta();
-	debounce = max((long)debounce - (long)delta, 0);
+	debounce = max(debounce - delta, 0);
 	scannerCaminho.update();
 }
 
