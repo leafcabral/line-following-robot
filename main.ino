@@ -275,13 +275,11 @@ void loop() {
 				break;
 			}
 
-			{
-				auto ratio = scannerCaminho.getRatio();
-				carro.turnFromRatio(ratio);
-				if (!ratio) {
-					carro.setSpeed(Speed::max);
-					carro.goForward();
-				}
+			auto ratio = scannerCaminho.getRatio();
+			carro.turnFromRatio(ratio);
+			if (!ratio) {
+				carro.setSpeed(Speed::max);
+				carro.goForward();
 			}
 			break;
 
