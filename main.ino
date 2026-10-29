@@ -60,6 +60,7 @@ namespace Program {
 	enum State {
 		Stopped,
 		FollowingLine,
+		NoLineFoundOhYes,
 		NoLineFoundOhNo
 	};
 }
@@ -137,15 +138,25 @@ struct Carro {
 		motorDireito.goForward();
 	}
 
-	void turnFromRatio(float ratio) {
+	void turnFromRatio(float ratio, bool complement = false) {
+		auto speed = Speed::fromNormalized(fabs(ratio));
+		auto speedComplement = Speed::max - speed;
 		if (ratio > 0) {
-			motorDireito.stop();
 			motorEsquerdo.goForward();
-			motorEsquerdo.setSpeed(Speed::fromNormalized(fabs(ratio)));
+			motorEsquerdo.setSpeed(speed);
+			if (complement) {
+				motorDireito.setSpeed(speedComplement);
+			} else {
+				motorDireito.stop();
+			}
 		} else if (ratio < 0) {
-			motorEsquerdo.stop();
 			motorDireito.goForward();
 			motorDireito.setSpeed(Speed::fromNormalized(fabs(ratio)));
+			if (complement) {
+				motorEsquerdo.setSpeed(speedComplement);
+			} else {
+				motorEsquerdo.stop();
+			}
 		}
 	}
 };
@@ -216,6 +227,7 @@ unsigned long currentTime;
 unsigned long stateStartedAt;
 long delta;
 long debounce = Timing::buttonDebounce;
+float ratio = 0;
 
 inline void updateDelta() {
 	auto oldTime = currentTime;
@@ -266,27 +278,43 @@ void loop() {
 	}
 
 	switch (programState) {
-		case Program::FollowingLine:
+		case Program::FollowingLine: {
+			ratio = scannerCaminho.getRatio();
+
 			if (!scannerCaminho.isPathVisible()) {
-				carro.setSpeed(Speed::max);
-				carro.goForward();
-
+				if (ratio == 0) {
+					updateState(Program::NoLineFoundOhYes);
+					carro.setSpeed(Speed::max);
+					carro.goForward();
+					break;
+				}
 				updateState(Program::NoLineFoundOhNo);
-				break;
 			}
-
-			auto ratio = scannerCaminho.getRatio();
 			carro.turnFromRatio(ratio);
 			if (!ratio) {
 				carro.setSpeed(Speed::max);
 				carro.goForward();
 			}
 			break;
+		}
 
-		case Program::NoLineFoundOhNo:
-			if (currentTime - stateStartedAt >= Timing::pathLostContinueDuration) {
+		case Program::NoLineFoundOhYes:
+			if (scannerCaminho.isPathVisible()) {
+				updateState(Program::FollowingLine);
+			}
+			else if (currentTime - stateStartedAt >= Timing::pathLostContinueDuration) {
 				updateState(Program::Stopped);
 			}
 			break;
+
+		case Program::NoLineFoundOhNo:
+			if (scannerCaminho.isPathVisible()) {
+				updateState(Program::FollowingLine);
+			}
+			else if (currentTime - stateStartedAt >= Timing::pathLostContinueDuration) {
+				updateState(Program::Stopped);
+			}
+
+			carro.turnFromRatio(ratio < 0 ? -1 : 1, true);
 	}
 }
