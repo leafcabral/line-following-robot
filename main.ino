@@ -40,7 +40,7 @@ namespace Pinos {
 
 namespace Speed {
 	constexpr byte min = 0;
-	constexpr byte max = 255;
+	constexpr byte max = 127;
 
 	constexpr byte fromNormalized(float value) {
 		return constrain(max * value, min, max);
@@ -49,7 +49,7 @@ namespace Speed {
 
 namespace Timing {
 	constexpr unsigned long buttonDebounce = 1000;
-	constexpr unsigned long pathLostContinueDuration = 500;
+	constexpr unsigned long pathLostContinueDuration = 1500;
 }
 
 namespace Direcao {
@@ -249,7 +249,7 @@ inline void updateState(Program::State newState) {
 }
 
 inline void handleButton() {
-	if (!digitalRead(Pinos::botao)) return;
+	if (digitalRead(Pinos::botao)) return;
 
 	debounce = Timing::buttonDebounce;
 
@@ -264,7 +264,7 @@ inline void handleButton() {
 void setup() {
 	carro.setup(Speed::max);
 	scannerCaminho.setup();
-	pinMode(Pinos::botao, INPUT);
+	pinMode(Pinos::botao, INPUT_PULLUP);
 
 	currentTime = millis();
 	updateState(Program::Stopped);
