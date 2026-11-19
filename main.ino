@@ -1,19 +1,4 @@
-//#define ARUDINO_DEF_FIX
-#ifdef ARUDINO_DEF_FIX
-	#define LOW 0
-	#define HIGH 1
-	#define INPUT 0
-	#define OUTPUT 1
-	typedef unsigned char byte;
-	void pinMode(byte, int);
-	byte digitalRead(byte);
-	void digitalWrite(byte, byte);
-	void analogWrite(byte, byte);
-	unsigned long millis();
-	float constrain(float, float, float);
-	float fabs(float);
-	float max(float, float);
-#endif
+//#define DEBUG
 
 
 typedef byte pin;
@@ -39,8 +24,9 @@ namespace Pinos {
 }
 
 namespace Speed {
-	constexpr byte min = 0;
-	constexpr byte max = 127;
+	constexpr byte zero = 0;
+	constexpr byte min = 40;
+	constexpr byte max = 60;
 
 	constexpr byte fromNormalized(float value) {
 		return constrain(max * value, min, max);
@@ -60,11 +46,9 @@ namespace Program {
 	enum State {
 		Stopped,
 		FollowingLine,
-		NoLineFoundOhYes,
 		NoLineFoundOhNo
 	};
 }
-
 
 struct Motor {
 	constexpr Motor(pin pinoNeg, pin pinoPos, pin pinoHabilitador)
@@ -127,7 +111,12 @@ struct Carro {
 		motorEsquerdo.goForward();
 		motorDireito.goForward();
 	}
-
+  
+	void goBack() {
+		motorEsquerdo.goBack();
+		motorDireito.goBack();
+	}
+  
 	void spinRight() {
 		motorEsquerdo.goForward();
 		motorDireito.goBack();
@@ -138,25 +127,28 @@ struct Carro {
 		motorDireito.goForward();
 	}
 
-	void turnFromRatio(float ratio, bool complement = false) {
+	void turnFromRatio(float ratio) {
 		auto speed = Speed::fromNormalized(fabs(ratio));
-		auto speedComplement = Speed::max - speed;
+		
+		#ifdef DEBUG
+			Serial.print(ratio);
+			Serial.print(" ");
+			Serial.print(speed);
+			Serial.print(" ");
+		#endif
+
 		if (ratio > 0) {
 			motorEsquerdo.goForward();
 			motorEsquerdo.setSpeed(speed);
-			if (complement) {
-				motorDireito.setSpeed(speedComplement);
-			} else {
-				motorDireito.stop();
-			}
+
+			motorDireito.goBack();
+			motorDireito.setSpeed(speed);
 		} else if (ratio < 0) {
 			motorDireito.goForward();
-			motorDireito.setSpeed(Speed::fromNormalized(fabs(ratio)));
-			if (complement) {
-				motorEsquerdo.setSpeed(speedComplement);
-			} else {
-				motorEsquerdo.stop();
-			}
+			motorDireito.setSpeed(speed);
+
+			motorEsquerdo.goBack();
+			motorEsquerdo.setSpeed(speed);
 		}
 	}
 };
@@ -166,7 +158,7 @@ struct Sensor {
 
 	void setup() { pinMode(pin_, INPUT); }
 
-	bool isOn() { return digitalRead(pin_); }
+	bool isOn() { return !digitalRead(pin_); }
 	
 private:
 	pin pin_;
@@ -176,15 +168,12 @@ struct PathScanner {
 	Sensor sensorEsquerdo;
 	Sensor sensorMeio;
 	Sensor sensorDireito;
-	unsigned int esquerdo : 1;
-	unsigned int meio : 1;
-	unsigned int direito : 1;
 
 	constexpr PathScanner(
 		Sensor sEsquerdo,
 		Sensor sMeio,
 		Sensor sDireito)
-	: sensorEsquerdo(sEsquerdo), sensorMeio(sMeio), sensorDireito(sDireito), esquerdo(0), meio(0), direito(0) {}
+	: sensorEsquerdo(sEsquerdo), sensorMeio(sMeio), sensorDireito(sDireito) {}
 
 	void setup() {
 		sensorEsquerdo.setup();
@@ -192,14 +181,13 @@ struct PathScanner {
 		sensorDireito.setup();
 	}
 	
-	void update() {
-		esquerdo = sensorEsquerdo.isOn();
-		meio = sensorMeio.isOn();
-		direito = sensorDireito.isOn();
+	float getRatio() {
+		return (sensorDireito.isOn() - sensorEsquerdo.isOn())
+			* (sensorMeio.isOn() ? 0.5f : 1.0f);
 	}
-
-	float getRatio() { return (direito - esquerdo) * (meio ? 0.5f : 1.0f); }
-	bool isPathVisible() { return esquerdo || meio || direito; }
+	bool isPathVisible() {
+		return sensorDireito.isOn() || sensorEsquerdo.isOn() || sensorMeio.isOn();
+	}
 };
 
 
@@ -238,7 +226,6 @@ inline void updateDelta() {
 inline void preloop() {
 	updateDelta();
 	debounce = max(debounce - delta, 0);
-	scannerCaminho.update();
 }
 
 inline void updateState(Program::State newState) {
@@ -257,7 +244,6 @@ inline void handleButton() {
 		updateState(Program::FollowingLine);
 	} else {
 		updateState(Program::Stopped);
-		carro.stop();
 	}
 }
 
@@ -265,6 +251,10 @@ void setup() {
 	carro.setup(Speed::max);
 	scannerCaminho.setup();
 	pinMode(Pinos::botao, INPUT_PULLUP);
+  
+	#ifdef DEBUG
+		Serial.begin(9600);
+	#endif
 
 	currentTime = millis();
 	updateState(Program::Stopped);
@@ -273,39 +263,30 @@ void setup() {
 void loop() {
 	preloop();
 
-	if (!debounce) {
-		handleButton();
-	}
+	#ifndef DEBUG
+		if (!debounce) {
+			handleButton();
+		}
+	#else
+		updateState(Program::FollowingLine);
+	#endif
 
 	switch (programState) {
 		case Program::FollowingLine: {
 			ratio = scannerCaminho.getRatio();
-
+          
 			if (!scannerCaminho.isPathVisible()) {
-				if (ratio == 0) {
-					updateState(Program::NoLineFoundOhYes);
-					carro.setSpeed(Speed::max);
-					carro.goForward();
-					break;
-				}
 				updateState(Program::NoLineFoundOhNo);
+				break;
 			}
-			carro.turnFromRatio(ratio);
 			if (!ratio) {
 				carro.setSpeed(Speed::max);
 				carro.goForward();
+			} else {
+				carro.turnFromRatio(ratio);
 			}
 			break;
 		}
-
-		case Program::NoLineFoundOhYes:
-			if (scannerCaminho.isPathVisible()) {
-				updateState(Program::FollowingLine);
-			}
-			else if (currentTime - stateStartedAt >= Timing::pathLostContinueDuration) {
-				updateState(Program::Stopped);
-			}
-			break;
 
 		case Program::NoLineFoundOhNo:
 			if (scannerCaminho.isPathVisible()) {
@@ -313,8 +294,13 @@ void loop() {
 			}
 			else if (currentTime - stateStartedAt >= Timing::pathLostContinueDuration) {
 				updateState(Program::Stopped);
+				break;
 			}
 
-			carro.turnFromRatio(ratio < 0 ? -1 : 1, true);
+			carro.setSpeed(Speed::fromNormalized(0.5));
+			carro.goBack();
+
+			break;
+			// carro.turnFromRatio(ratio < 0 ? -1 : 1);
 	}
 }
